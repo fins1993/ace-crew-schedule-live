@@ -134,9 +134,9 @@ td,th{border-bottom:1px solid var(--line);padding:6px;text-align:left;font-size:
     <div class="inline" style="margin-bottom:8px"><input id="newveh" placeholder="e.g. T-11 ISUZU"><button class="pri" id="addveh">Add</button></div>
     <div class="chips" id="vehlist"></div>
   </section>
-  <section id="officesec" class="edit-only">
+  <section id="officesec" class="edit-only hide">
     <h3>Office logins (Admins)</h3>
-    <p style="margin:0 0 8px;color:var(--mut);font-size:13px">For office staff who sign in with an email and password. They don't appear on the crew roster.</p>
+    <p style="margin:0 0 8px;color:var(--mut);font-size:13px">For office staff who sign in with an email and password. They don't appear on the crew roster. Only you can see and manage this list.</p>
     <div class="inline" style="flex-wrap:wrap;margin-bottom:8px">
       <input id="offname" placeholder="Name, e.g. John Clarke" style="width:170px">
       <input id="offemail" placeholder="Email" type="email" style="width:200px">
@@ -239,6 +239,8 @@ onAuthStateChanged(auth, async user => {
   if (!snap.exists()) { alert("This login has no access yet. Ask the office."); signOut(auth); return; }
   me = { uid: user.uid, ...snap.data() };
   $("hdr").classList.remove("hide");
+  me.isOwner = (user.email || "").toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  $("officesec").classList.toggle("hide", !me.isOwner);
   const office = me.role === "admin" || me.role === "viewer";
   document.body.classList.toggle("ro", me.role === "viewer");
   $("robanner").classList.toggle("hide", me.role !== "viewer");
@@ -259,7 +261,7 @@ function startAdmin() {
   unsubs.push(onSnapshot(query(collection(db, "logs"), orderBy("at", "desc"), limit(60)), s => {
     $("feed").innerHTML = s.docs.map(d => { const x = d.data(); return `<div><div class="t">${esc(fmtTime(x.at))} · ${esc(x.name)}${x.date ? " · " + esc(x.date) : ""}</div>${esc(x.text)}</div>`; }).join("") || "<div class='t'>No activity yet.</div>";
   }));
-  if (me.role === "admin") unsubs.push(onSnapshot(query(collection(db, "users"), where("role", "in", ["admin", "viewer"])), s => {
+  if (me.isOwner) unsubs.push(onSnapshot(query(collection(db, "users"), where("role", "in", ["admin", "viewer"])), s => {
     officeUsers = s.docs.map(d => ({ uid: d.id, ...d.data() })); renderRoster();
   }));
   $("daypick").value = curDay;
