@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Ace Schedule">
 <title>Ace Crew Schedule</title>
 <style>
@@ -194,7 +195,17 @@ $("lbtn").onclick = async () => {
   if (!u || !p) { $("lerr").textContent = "Enter your username and PIN."; return; }
   const email = u.includes("@") ? u : `${u.toLowerCase().replace(/\s+/g,"")}@${USER_DOMAIN}`;
   try { await signInWithEmailAndPassword(auth, email, p); }
-  catch (e) { $("lerr").textContent = "That username/PIN didn't work."; }
+  catch (e) {
+    const why = {
+      "auth/invalid-credential": "That username/PIN didn't match.",
+      "auth/wrong-password": "That username/PIN didn't match.",
+      "auth/user-not-found": "No login with that name exists yet.",
+      "auth/operation-not-allowed": "Email/Password sign-in isn't turned on in Firebase.",
+      "auth/unauthorized-domain": "This web address isn't in Firebase's Authorized domains.",
+      "auth/too-many-requests": "Too many tries. Wait a few minutes and try again."
+    }[e.code] || "Sign-in failed.";
+    $("lerr").textContent = `${why} (${e.code || e.message})`;
+  }
 };
 $("lp").addEventListener("keydown", e => { if (e.key === "Enter") $("lbtn").click(); });
 $("logout").onclick = () => signOut(auth);
@@ -474,7 +485,11 @@ async function startCrew() {
   const end = new Date(start); end.setDate(end.getDate() + la); end.setMilliseconds(-1);
   unsubs.push(onSnapshot(query(collectionGroup(db, "crews"), where("memberUids", "array-contains", me.uid), where("dateTs", ">=", Timestamp.fromDate(start)), where("dateTs", "<=", Timestamp.fromDate(end))),
     s => { myCrews = s.docs.map(d => ({ id: d.id, ...d.data() })); renderCrew(); },
-    err => { console.error(err); $("crewlist").innerHTML = `<div class="empty">Couldn't load your schedule. ${esc(err.message)}</div>`; }));
+    err => {
+      console.error(err);
+      const msg = esc(err.message).replace(/(https:\/\/console\.firebase\.google\.com[^\s<]*)/g, '<a href="$1" target="_blank" rel="noopener">Click here to create the missing index</a>');
+      $("crewlist").innerHTML = `<div class="empty">Couldn't load your schedule.<br><br>${msg}</div>`;
+    }));
   unsubs.push(onSnapshot(query(collection(db, "notes"), where("memberUids", "array-contains", me.uid), where("date", ">=", todayKey())),
     s => { myNotes = s.docs.map(d => ({ id: d.id, ...d.data() })); renderCrew(); }, err => console.error(err)));
 }
