@@ -275,8 +275,8 @@ function assignments() { // personId -> [crew labels]
   return m;
 }
 
-function personOptions(sel, blank = "—") {
-  return `<option value="">${blank}</option>` + activePeople().map(p => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+function personOptions(sel, blank = "—", exclude = []) {
+  return `<option value="">${blank}</option>` + activePeople().filter(p => p.id === sel || !exclude.includes(p.id)).map(p => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(p.name)}</option>`).join("");
 }
 function vehicleOptions(sel) {
   const names = Object.values(vehicles).map(v => v.name).sort();
@@ -314,7 +314,7 @@ function crewCardHTML(c, asg, vehUse) {
     <div class="row"><div class="lbl">Lead Foreman</div><select data-f="foremanId">${personOptions(c.foremanId)}</select></div>
     <div class="row"><div class="lbl">Vehicle</div><select data-f="vehicle">${vehicleOptions(c.vehicle)}</select></div>
     <div class="row"><div class="lbl">Second</div><select data-f="secondId">${personOptions(c.secondId)}</select></div>
-    <div class="row"><div class="lbl">Crew</div><div class="chips">${(c.crewIds||[]).map(id => chip(id, "crewIds")).join("")}</div><select data-add="crewIds">${personOptions("", "+ add crew")}</select></div>
+    <div class="row"><div class="lbl">Crew</div><div class="chips">${(c.crewIds||[]).map(id => chip(id, "crewIds")).join("")}</div><select data-add="crewIds">${personOptions("", "+ add crew member", [c.foremanId, c.secondId, ...(c.crewIds||[])].filter(Boolean))}</select></div>
     <div class="row"><div class="lbl">Outside labor (Yirah, Equa…)</div><input data-f="extraLabor" value="${esc(c.extraLabor)}" placeholder="e.g. 3 Yirah labor"></div>
     <div class="row"><div class="lbl">Job number</div><input data-f="jobNumber" value="${esc(c.jobNumber)}"></div>
     <div class="row"><div class="lbl">Jobs (name · location)</div>
@@ -360,8 +360,11 @@ $("board").addEventListener("change", e => {
     saveCrew(id, { [f]: v }, `${fieldNames[f]} ${show(f, old)} → ${show(f, v)}`);
   } else if (t.dataset.add) {
     if (!t.value) return;
-    const list = [...(c.crewIds || [])]; if (!list.includes(t.value)) list.push(t.value);
-    saveCrew(id, { crewIds: list }, `added ${pname(t.value)}`);
+    const pid = t.value;
+    const list = [...(c.crewIds || [])]; if (!list.includes(pid)) list.push(pid);
+    saveCrew(id, { crewIds: list }, `added ${pname(pid)}`);
+    // show the new name right away and reset the picker so the next person can be added
+    t.blur(); renderAll();
   } else if (t.dataset.job !== undefined) {
     const jobs = (c.jobs || []).map(j => ({ ...j })); jobs[+t.dataset.job][t.dataset.k] = t.value;
     saveCrew(id, { jobs }, `job updated: ${jobs.map(j => j.name).filter(Boolean).join(", ")}`);
