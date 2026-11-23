@@ -17,6 +17,9 @@ button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
 button.sm{padding:2px 8px;font-size:13px}
 input,select,textarea{border:1px solid var(--line);border-radius:6px;padding:5px 7px;background:#fff;width:100%}
 .hide{display:none!important}
+body.ro .edit-only,body.ro #board button,body.ro .chip b,body.ro #roster button,body.ro #roster .inline:has(input){display:none!important}
+body.ro #board input,body.ro #board select,body.ro #board textarea,body.ro #roster input{background:transparent;border-color:transparent;color:var(--ink);-webkit-appearance:none;appearance:none;opacity:1}
+.robanner{background:#eef1f8;border:1px solid #c9d3ea;border-radius:8px;padding:6px 10px;margin-bottom:10px;font-size:13px}
 header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 16px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
 header h1{font-size:18px;margin:0 12px 0 0}
 header .sp{flex:1}
@@ -104,15 +107,16 @@ td,th{border-bottom:1px solid var(--line);padding:6px;text-align:left;font-size:
       <button id="nextday">&rarr;</button>
       <strong id="daylabel"></strong>
       <span class="sp" style="flex:1"></span>
-      <button id="copyprev">Copy previous day</button>
-      <button class="pri" id="addcrew">+ Crew column</button>
+      <button id="copyprev" class="edit-only">Copy previous day</button>
+      <button class="pri edit-only" id="addcrew">+ Crew column</button>
     </div>
+    <div class="robanner hide" id="robanner">View only. You can see everything, but only Sal can make changes.</div>
     <div class="board" id="board"></div>
   </div>
   <div class="side">
     <div class="panel"><h3>Unassigned today</h3><div class="chips" id="unassigned"></div></div>
-    <div class="panel"><h3>OFF</h3><div class="chips" id="offchips"></div><select id="offadd"></select></div>
-    <div class="panel"><h3>Service</h3><div class="chips" id="svcchips"></div><select id="svcadd"></select></div>
+    <div class="panel"><h3>OFF</h3><div class="chips" id="offchips"></div><select id="offadd" class="edit-only"></select></div>
+    <div class="panel"><h3>Service</h3><div class="chips" id="svcchips"></div><select id="svcadd" class="edit-only"></select></div>
     <div class="panel"><h3>Vehicles not assigned</h3><div class="chips" id="vehfree"></div></div>
     <div class="panel"><h3>Live activity</h3><div class="feed" id="feed"></div></div>
   </div>
@@ -129,6 +133,18 @@ td,th{border-bottom:1px solid var(--line);padding:6px;text-align:left;font-size:
     <h3>Vehicles</h3>
     <div class="inline" style="margin-bottom:8px"><input id="newveh" placeholder="e.g. T-11 ISUZU"><button class="pri" id="addveh">Add</button></div>
     <div class="chips" id="vehlist"></div>
+  </section>
+  <section id="officesec" class="edit-only">
+    <h3>Office logins (Admins)</h3>
+    <p style="margin:0 0 8px;color:var(--mut);font-size:13px">For office staff who sign in with an email and password. They don't appear on the crew roster.</p>
+    <div class="inline" style="flex-wrap:wrap;margin-bottom:8px">
+      <input id="offname" placeholder="Name, e.g. John Clarke" style="width:170px">
+      <input id="offemail" placeholder="Email" type="email" style="width:200px">
+      <input id="offpass" placeholder="Password (6+ characters)" style="width:180px">
+      <select id="offrole" style="width:auto"><option value="viewer">Admin (view only)</option><option value="admin">Admin (full edit)</option></select>
+      <button class="pri" id="mkoffice">Create login</button>
+    </div>
+    <table><thead><tr><th>Name</th><th>Email</th><th>Access</th><th></th></tr></thead><tbody id="officerows"></tbody></table>
   </section>
   <section>
     <h3>Crew look-ahead</h3>
@@ -223,13 +239,16 @@ onAuthStateChanged(auth, async user => {
   if (!snap.exists()) { alert("This login has no access yet. Ask the office."); signOut(auth); return; }
   me = { uid: user.uid, ...snap.data() };
   $("hdr").classList.remove("hide");
-  $("whoami").textContent = me.name + (me.role === "admin" ? " (Admin)" : "");
-  if (me.role === "admin") startAdmin(); else startCrew();
+  const office = me.role === "admin" || me.role === "viewer";
+  document.body.classList.toggle("ro", me.role === "viewer");
+  $("robanner").classList.toggle("hide", me.role !== "viewer");
+  $("whoami").textContent = me.name + (me.role === "admin" ? " (Admin)" : me.role === "viewer" ? " (View only)" : "");
+  if (office) startAdmin(); else startCrew();
 });
 
 // =============================== ADMIN ===============================
 let people = {}, vehicles = {}, crews = {}, dayDoc = {}, dayNotes = [], curDay = todayKey(), lookahead = 7;
-let pendingRender = false;
+let pendingRender = false, officeUsers = [];
 
 function startAdmin() {
   $("admintabs").classList.remove("hide");
@@ -239,6 +258,9 @@ function startAdmin() {
   unsubs.push(onSnapshot(doc(db, "settings", "app"), s => { lookahead = s.data()?.lookahead ?? 7; $("lookahead").value = lookahead; }));
   unsubs.push(onSnapshot(query(collection(db, "logs"), orderBy("at", "desc"), limit(60)), s => {
     $("feed").innerHTML = s.docs.map(d => { const x = d.data(); return `<div><div class="t">${esc(fmtTime(x.at))} · ${esc(x.name)}${x.date ? " · " + esc(x.date) : ""}</div>${esc(x.text)}</div>`; }).join("") || "<div class='t'>No activity yet.</div>";
+  }));
+  if (me.role === "admin") unsubs.push(onSnapshot(query(collection(db, "users"), where("role", "in", ["admin", "viewer"])), s => {
+    officeUsers = s.docs.map(d => ({ uid: d.id, ...d.data() })); renderRoster();
   }));
   $("daypick").value = curDay;
   watchDay();
@@ -285,7 +307,7 @@ function vehicleOptions(sel) {
 }
 
 function renderAll() {
-  if (!me || me.role !== "admin") return;
+  if (!isOffice()) return;
   if ($("board").contains(document.activeElement) && document.activeElement.tagName !== "BUTTON") { pendingRender = true; return; }
   pendingRender = false;
   const asg = assignments();
@@ -299,6 +321,12 @@ function renderAll() {
   $("offadd").innerHTML = personOptions("", "+ add to OFF");
   $("svcadd").innerHTML = personOptions("", "+ add to Service");
   $("vehfree").innerHTML = Object.values(vehicles).map(v => v.name).sort().filter(n => !vehUse[n]).map(n => `<span class="chip">${esc(n)}</span>`).join("");
+  lockIfViewer();
+}
+const isOffice = () => me && (me.role === "admin" || me.role === "viewer");
+function lockIfViewer() {
+  if (me?.role !== "viewer") return;
+  document.querySelectorAll("#board input, #board select, #board textarea, #roster input, #roster select").forEach(el => el.disabled = true);
 }
 document.addEventListener("focusout", () => setTimeout(() => { if (pendingRender && !$("board").contains(document.activeElement)) renderAll(); }, 50));
 
@@ -430,12 +458,16 @@ document.querySelector(".side").addEventListener("click", e => {
 
 // ---------------- ROSTER & LOGINS ----------------
 function renderRoster() {
-  if (!me || me.role !== "admin") return;
+  if (!isOffice()) return;
   $("peoplerows").innerHTML = Object.values(people).sort((a,b) => a.name.localeCompare(b.name)).map(p => `<tr>
     <td>${esc(p.name)}${p.active === false ? " <span class='badge'>inactive</span>" : ""}</td>
     <td>${p.uid ? `✓ <b>${esc(p.username)}</b>` : `<span class="inline"><input placeholder="username" data-un="${p.id}" style="width:110px"><input placeholder="6-digit PIN" data-pin="${p.id}" inputmode="numeric" maxlength="6" style="width:100px"><button class="sm" data-mklogin="${p.id}">Create login</button></span>`}</td>
     <td><button class="sm" data-toggle="${p.id}">${p.active === false ? "Reactivate" : "Deactivate"}</button></td></tr>`).join("");
   $("vehlist").innerHTML = Object.values(vehicles).sort((a,b) => a.name.localeCompare(b.name)).map(v => `<span class="chip">${esc(v.name)}<b data-rmveh="${v.id}">×</b></span>`).join("");
+  $("officerows").innerHTML = officeUsers.sort((a,b) => (a.name||"").localeCompare(b.name||"")).map(u => `<tr>
+    <td>${esc(u.name)}</td><td>${esc(u.email || "")}</td>
+    <td>${u.uid === me.uid ? "Admin (full edit) — you" : `<select data-setrole="${u.uid}" style="width:auto"><option value="viewer" ${u.role === "viewer" ? "selected" : ""}>Admin (view only)</option><option value="admin" ${u.role === "admin" ? "selected" : ""}>Admin (full edit)</option><option value="none">Remove access</option></select>`}</td><td></td></tr>`).join("");
+  lockIfViewer();
 }
 $("addperson").onclick = async () => {
   const n = $("newperson").value.trim(); if (!n) return;
@@ -467,6 +499,30 @@ $("roster").addEventListener("click", async e => {
       alert(`Login created.\nUsername: ${un}\nPIN: ${pin}\n\nGive these to ${people[pid].name}. Re-save any crews they're already on so they can see them.`);
     } catch (err) { alert(err.code === "auth/email-already-in-use" ? "That username is taken." : "Couldn't create login: " + err.message); }
   }
+});
+$("mkoffice").onclick = async () => {
+  const name = $("offname").value.trim(), email = $("offemail").value.trim().toLowerCase(), pass = $("offpass").value, role = $("offrole").value;
+  if (!name) { alert("Enter their name."); return; }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { alert("Enter a valid email."); return; }
+  if (pass.length < 6) { alert("Password must be at least 6 characters."); return; }
+  try {
+    const secApp = initializeApp(firebaseConfig, "maker-" + Date.now());
+    const secAuth = getAuth(secApp);
+    const cred = await createUserWithEmailAndPassword(secAuth, email, pass);
+    await signOut(secAuth);
+    await setDoc(doc(db, "users", cred.user.uid), { role, name, email });
+    log(`created ${role === "viewer" ? "view-only" : "full"} admin login for ${name}`);
+    ["offname","offemail","offpass"].forEach(id => $(id).value = "");
+    alert(`Login created for ${name}.\nEmail: ${email}\nPassword: ${pass}\nAccess: ${role === "viewer" ? "Admin (view only)" : "Admin (full edit)"}`);
+  } catch (err) { alert(err.code === "auth/email-already-in-use" ? "That email already has a login." : "Couldn't create login: " + err.message); }
+};
+$("roster").addEventListener("change", async e => {
+  const uid = e.target.dataset.setrole; if (!uid) return;
+  const u = officeUsers.find(x => x.uid === uid); const v = e.target.value;
+  if (v === "none") {
+    if (!confirm(`Remove ${u.name}'s access? They won't be able to sign in to the schedule.`)) { renderRoster(); return; }
+    await deleteDoc(doc(db, "users", uid)); log(`removed access for ${u.name}`);
+  } else { await updateDoc(doc(db, "users", uid), { role: v }); log(`${u.name} set to ${v === "viewer" ? "view only" : "full edit"}`); }
 });
 $("savelook").onclick = async () => {
   const n = Math.max(1, Math.min(30, parseInt($("lookahead").value) || 7));
