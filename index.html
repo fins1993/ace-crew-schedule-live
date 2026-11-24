@@ -71,6 +71,12 @@ td,th{border-bottom:1px solid var(--line);padding:6px;text-align:left;font-size:
 .badge{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px;background:#ddd;margin-left:6px;vertical-align:middle}
 .badge.chg{background:#e6c84d}
 .badge.tent{background:#c9d3ea}
+.okrow{display:flex;flex-wrap:wrap;gap:4px}
+.ok{border-radius:6px;padding:2px 7px;font-size:12px;border:1px solid var(--line);background:#fafaf7;color:var(--mut)}
+.ok.yes{background:#dff3e6;border-color:#8cc9a3;color:#1f6f43;font-weight:600}
+.ok.stale{background:#fff4cc;border-color:#e6c84d;color:#7a5d00}
+.ackbtn{width:100%;margin-top:10px;padding:12px;font-size:16px;font-weight:600}
+.acked{margin-top:10px;padding:10px;border-radius:8px;background:#dff3e6;color:#1f6f43;font-weight:600;text-align:center}
 .daylbl{font-weight:700;margin:16px 2px 6px}
 .empty{color:var(--mut);text-align:center;padding:30px}
 </style>
@@ -250,7 +256,7 @@ onAuthStateChanged(auth, async user => {
 
 // =============================== ADMIN ===============================
 let people = {}, vehicles = {}, crews = {}, dayDoc = {}, dayNotes = [], curDay = todayKey(), lookahead = 7;
-let pendingRender = false, officeUsers = [];
+let pendingRender = false, officeUsers = [], dayAcks = [];
 
 function startAdmin() {
   $("admintabs").classList.remove("hide");
@@ -272,11 +278,12 @@ function startAdmin() {
 let dayUnsubs = [];
 function watchDay() {
   dayUnsubs.forEach(u => u()); dayUnsubs = [];
-  crews = {}; dayDoc = {}; dayNotes = [];
+  crews = {}; dayDoc = {}; dayNotes = []; dayAcks = [];
   $("daylabel").textContent = nice(curDay);
   dayUnsubs.push(onSnapshot(collection(db, "days", curDay, "crews"), s => { crews = {}; s.forEach(d => crews[d.id] = { id: d.id, ...d.data() }); renderAll(); }));
   dayUnsubs.push(onSnapshot(doc(db, "days", curDay), s => { dayDoc = s.data() || {}; renderAll(); }));
   dayUnsubs.push(onSnapshot(query(collection(db, "notes"), where("date", "==", curDay)), s => { dayNotes = s.docs.map(d => ({ id: d.id, ...d.data() })); renderAll(); }));
+  dayUnsubs.push(onSnapshot(query(collection(db, "acks"), where("date", "==", curDay)), s => { dayAcks = s.docs.map(d => d.data({ serverTimestamps: "estimate" })); renderAll(); }, err => console.warn("acks", err)));
 }
 
 function showTab(t) {
@@ -352,10 +359,29 @@ function crewCardHTML(c, asg, vehUse) {
       ${(c.jobs||[]).map((j,i) => `<div class="job"><input data-job="${i}" data-k="name" value="${esc(j.name)}" placeholder="Job name"><input data-job="${i}" data-k="location" value="${esc(j.location)}" placeholder="Location"><button class="sm" data-rmjob="${i}">×</button></div>`).join("")}
       <button class="sm" data-addjob="1">+ job</button></div>
     <div class="row"><div class="lbl">Notes</div><textarea data-f="notes" rows="2">${esc(c.notes)}</textarea></div>
+    ${ackRowHTML(c)}
     ${warns.map(w => `<div class="warnline">⚠ ${esc(w)}</div>`).join("")}
     ${notes.length ? `<div class="cnotes"><div class="lbl">From the crew</div>${notes.map(n => `<div><b>${esc(n.name)}</b> <span style="color:var(--mut);font-size:11px">${esc(fmtTime(n.at))}</span><br>${esc(n.text)}${n.photoUrl ? `<a href="${esc(n.photoUrl)}" target="_blank"><img src="${esc(n.photoUrl)}" loading="lazy"></a>` : ""}</div>`).join("")}</div>` : ""}
     <div style="display:flex;gap:6px;margin-top:8px"><button class="sm" data-move="-1">◀</button><button class="sm" data-move="1">▶</button><span style="flex:1"></span><button class="sm" data-delcrew="1">Delete crew</button></div>
   </div>`;
+}
+
+// "OK" status for each member with a login: green once they confirm the day's
+// schedule, amber if the crew was changed after they confirmed.
+const ms = ts => ts?.toMillis?.() || 0;
+function ackState(c, uid) {
+  const a = dayAcks.find(x => x.crewId === c.id && x.uid === uid);
+  if (!a) return { st: "none" };
+  return { st: ms(a.at) >= ms(c.updatedAt) ? "yes" : "stale", at: a.at };
+}
+function ackRowHTML(c) {
+  const ids = [...new Set([c.foremanId, c.secondId, ...(c.crewIds || [])].filter(id => id && people[id]?.uid))];
+  if (!ids.length) return "";
+  return `<div class="row"><div class="lbl">Confirmed schedule</div><div class="okrow">${ids.map(id => {
+    const { st, at } = ackState(c, people[id].uid);
+    const tip = st === "yes" ? "OK at " + fmtTime(at) : st === "stale" ? "Confirmed " + fmtTime(at) + ", then the crew changed" : "Not confirmed yet";
+    return `<span class="ok ${st}" title="${esc(tip)}">${st === "yes" ? "☑ OK" : st === "stale" ? "⟳ re-OK" : "☐"} ${esc(pname(id))}</span>`;
+  }).join("")}</div></div>`;
 }
 
 // Build the derived fields (names + who may read) every time a crew is saved
@@ -540,7 +566,7 @@ $("savelook").onclick = async () => {
 };
 
 // =============================== CREW VIEW ===============================
-let myCrews = [], myNotes = [], crewTab = "today";
+let myCrews = [], myNotes = [], myAcks = [], crewTab = "today";
 const seenKey = () => "seen-" + me.uid;
 function getSeen() { try { return JSON.parse(localStorage.getItem(seenKey()) || "{}"); } catch { return {}; } }
 function setSeen(o) { try { localStorage.setItem(seenKey(), JSON.stringify(o)); } catch {} }
@@ -559,15 +585,18 @@ async function startCrew() {
       const msg = esc(err.message).replace(/(https:\/\/console\.firebase\.google\.com[^\s<]*)/g, '<a href="$1" target="_blank" rel="noopener">Click here to create the missing index</a>');
       $("crewlist").innerHTML = `<div class="empty">Couldn't load your schedule.<br><br>${msg}</div>`;
     }));
+  unsubs.push(onSnapshot(query(collection(db, "acks"), where("uid", "==", me.uid), where("date", "==", todayKey())),
+    s => { myAcks = s.docs.map(d => d.data({ serverTimestamps: "estimate" })); renderCrew(); }, err => console.error(err)));
   unsubs.push(onSnapshot(query(collection(db, "notes"), where("memberUids", "array-contains", me.uid), where("date", ">=", todayKey())),
     s => { myNotes = s.docs.map(d => ({ id: d.id, ...d.data() })); renderCrew(); }, err => console.error(err)));
 }
-document.addEventListener("focusout", () => setTimeout(() => { if (me && me.role !== "admin" && !document.activeElement?.closest?.(".ccard")) renderCrew(); }, 300));
+document.addEventListener("focusout", () => setTimeout(() => { if (me && me.role === "crew" && !document.activeElement?.closest?.(".ccard")) renderCrew(); }, 300));
 document.querySelectorAll("#crewtabs button").forEach(b => b.onclick = () => { crewTab = b.dataset.v; document.querySelectorAll("#crewtabs button").forEach(x => x.classList.toggle("on", x === b)); renderCrew(); });
 
 function renderCrew() {
   // don't wipe a note or photo someone is in the middle of sending
-  if (document.activeElement?.closest?.(".ccard")) return;
+  const ae = document.activeElement;
+  if (ae?.closest?.(".ccard") && /^(TEXTAREA|INPUT)$/.test(ae.tagName)) return;
   if ([...document.querySelectorAll("#crewlist [data-note]")].some(x => x.value.trim()) || [...document.querySelectorAll("#crewlist [data-photo]")].some(x => x.files.length)) return;
   const t = todayKey(), tm = addDays(t, 1);
   let list = myCrews.filter(c => crewTab === "today" ? c.date === t : crewTab === "tomorrow" ? c.date === tm : true)
@@ -593,7 +622,7 @@ function renderCrew() {
         ${c.extraLabor ? `<dt>Labor</dt><dd>${esc(c.extraLabor)}</dd>` : ""}
         ${c.notes ? `<dt>Notes</dt><dd>${esc(c.notes)}</dd>` : ""}
       </dl>
-      ${changed ? `<button class="sm" data-gotit="1" style="margin-top:8px">Got it</button>` : ""}
+      ${c.date === t ? crewAckHTML(c) : (changed ? `<button class="sm" data-gotit="1" style="margin-top:8px">Got it</button>` : "")}
       <div class="cnotes">
         ${notes.map(n => `<div style="margin-bottom:6px"><b>${esc(n.name)}</b> <span style="color:var(--mut);font-size:11px">${esc(fmtTime(n.at))}</span><br>${esc(n.text)}${n.photoUrl ? `<img src="${esc(n.photoUrl)}" loading="lazy">` : ""}</div>`).join("")}
         <textarea rows="2" placeholder="Add a note for the office…" data-note="1"></textarea>
@@ -606,6 +635,11 @@ function renderCrew() {
   $("crewlist").innerHTML = html || `<div class="empty">${crewTab === "week" ? "Nothing scheduled for you yet." : "Nothing scheduled for you " + (crewTab === "today" ? "today" : "tomorrow") + " yet."}</div>`;
 }
 
+function crewAckHTML(c) {
+  const a = myAcks.find(x => x.crewId === c.id);
+  if (a && ms(a.at) >= ms(c.updatedAt)) return `<div class="acked">✓ You confirmed today's schedule at ${esc(fmtTime(a.at))}</div>`;
+  return `<button class="pri ackbtn" data-ack="1">${a ? "Schedule changed — tap OK again" : "OK — I've seen today's schedule"}</button>`;
+}
 async function shrink(file) { // resize photos to ~1600px JPEG before upload
   const img = await createImageBitmap(file);
   const s = Math.min(1, 1600 / Math.max(img.width, img.height));
@@ -619,6 +653,16 @@ $("crewlist").addEventListener("change", e => {
 $("crewlist").addEventListener("click", async e => {
   const t = e.target, card = t.closest(".ccard"); if (!card) return;
   const cid = card.dataset.c, date = card.dataset.d, c = myCrews.find(x => x.id === cid && x.date === date);
+  if (t.dataset.ack) {
+    if (date !== todayKey()) return;
+    t.disabled = true; t.textContent = "Saving…";
+    try {
+      await setDoc(doc(db, "acks", `${date}_${cid}_${me.uid}`), { date, crewId: cid, uid: me.uid, name: me.name, at: serverTimestamp() });
+      const s = getSeen(); s[date + cid] = +card.dataset.upd; setSeen(s);
+      log(`OK'd today's schedule (${c?.label || "crew"})`, date);
+      document.activeElement?.blur(); renderCrew();
+    } catch (err) { alert("Couldn't save your OK: " + err.message); t.disabled = false; t.textContent = "OK — I've seen today's schedule"; }
+  }
   if (t.dataset.gotit) { const s = getSeen(); s[date + cid] = +card.dataset.upd; setSeen(s); renderCrew(); }
   if (t.dataset.send) {
     const text = card.querySelector("[data-note]").value.trim();
