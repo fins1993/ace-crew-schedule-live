@@ -302,10 +302,11 @@ function assignments() { // personId -> [crew labels]
 function personOptions(sel, blank = "—", exclude = []) {
   return `<option value="">${blank}</option>` + activePeople().filter(p => p.id === sel || !exclude.includes(p.id)).map(p => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${esc(p.name)}</option>`).join("");
 }
-function vehicleOptions(sel) {
-  const names = Object.values(vehicles).map(v => v.name).sort();
-  if (sel && !names.includes(sel)) names.unshift(sel);
-  return `<option value="">—</option>` + names.map(n => `<option ${n === sel ? "selected" : ""}>${esc(n)}</option>`).join("");
+// A crew can have several vehicles. Older crews saved one in "vehicle"; read either.
+const vehs = c => Array.isArray(c.vehicleList) ? c.vehicleList : (c.vehicle ? [c.vehicle] : []);
+function vehicleOptions(exclude = []) {
+  const names = Object.values(vehicles).map(v => v.name).sort().filter(n => !exclude.includes(n));
+  return `<option value="">+ add vehicle</option>` + names.map(n => `<option>${esc(n)}</option>`).join("");
 }
 
 function renderAll() {
@@ -313,7 +314,7 @@ function renderAll() {
   if ($("board").contains(document.activeElement) && document.activeElement.tagName !== "BUTTON") { pendingRender = true; return; }
   pendingRender = false;
   const asg = assignments();
-  const vehUse = {}; sortedCrews().forEach(c => c.vehicle && (vehUse[c.vehicle] ||= []).push(c.label || "crew"));
+  const vehUse = {}; sortedCrews().forEach(c => vehs(c).forEach(v => (vehUse[v] ||= []).push(c.label || "crew")));
   $("board").innerHTML = sortedCrews().map(c => crewCardHTML(c, asg, vehUse)).join("") || `<div class="empty">No crews for this day yet. Add a crew column or copy the previous day.</div>`;
   // side panels
   const off = dayDoc.off || [], svc = dayDoc.service || [];
@@ -337,12 +338,12 @@ function crewCardHTML(c, asg, vehUse) {
   const chip = (id, field) => `<span class="chip ${dup(id) ? "bad" : ""}" title="${dup(id) ? "Also on: " + esc(asg[id].join(", ")) : ""}">${esc(pname(id))}<b data-rm="${field}" data-id="${id}" data-c="${c.id}">×</b></span>`;
   const warns = [];
   [c.foremanId, c.secondId, ...(c.crewIds||[])].filter(dup).forEach(id => warns.push(`${pname(id)} is on more than one crew`));
-  if (c.vehicle && vehUse[c.vehicle]?.length > 1) warns.push(`${c.vehicle} is on more than one crew`);
+  vehs(c).filter(v => vehUse[v]?.length > 1).forEach(v => warns.push(`${v} is on more than one crew`));
   const notes = dayNotes.filter(n => n.crewId === c.id).sort((a,b) => (a.at?.seconds||0) - (b.at?.seconds||0));
   return `<div class="crew" data-c="${c.id}">
     <div class="head"><input data-f="label" value="${esc(c.label)}" placeholder="Crew / area"><input data-f="startTime" type="time" value="${esc(c.startTime)}" style="width:96px"></div>
     <div class="row"><div class="lbl">Lead Foreman</div><select data-f="foremanId">${personOptions(c.foremanId)}</select></div>
-    <div class="row"><div class="lbl">Vehicle</div><select data-f="vehicle">${vehicleOptions(c.vehicle)}</select></div>
+    <div class="row"><div class="lbl">Vehicles</div><div class="chips">${vehs(c).map(v => `<span class="chip ${vehUse[v]?.length > 1 ? "bad" : ""}">${esc(v)}<b data-rmv="${esc(v)}">×</b></span>`).join("")}</div><select data-addveh="1">${vehicleOptions(vehs(c))}</select></div>
     <div class="row"><div class="lbl">Second</div><select data-f="secondId">${personOptions(c.secondId)}</select></div>
     <div class="row"><div class="lbl">Crew</div><div class="chips">${(c.crewIds||[]).map(id => chip(id, "crewIds")).join("")}</div><select data-add="crewIds">${personOptions("", "+ add crew member", [c.foremanId, c.secondId, ...(c.crewIds||[])].filter(Boolean))}</select></div>
     <div class="row"><div class="lbl">Outside labor (Yirah, Equa…)</div><input data-f="extraLabor" value="${esc(c.extraLabor)}" placeholder="e.g. 3 Yirah labor"></div>
@@ -364,6 +365,8 @@ function derived(c) {
     foremanName: c.foremanId ? pname(c.foremanId) : "",
     secondName: c.secondId ? pname(c.secondId) : "",
     crewNames: (c.crewIds || []).map(pname),
+    vehicleList: vehs(c),
+    vehicle: vehs(c).join(", "),
     memberUids: [...new Set(ids.map(id => people[id]?.uid).filter(Boolean))],
     date: curDay,
     dateTs: Timestamp.fromDate(dateOf(curDay)),
@@ -388,6 +391,10 @@ $("board").addEventListener("change", e => {
     const f = t.dataset.f, old = c[f] || "", v = t.value;
     if (old === v) return;
     saveCrew(id, { [f]: v }, `${fieldNames[f]} ${show(f, old)} → ${show(f, v)}`);
+  } else if (t.dataset.addveh) {
+    const v = t.value; if (!v) return;
+    const list = vehs(c); if (!list.includes(v)) saveCrew(id, { vehicleList: [...list, v] }, `added vehicle ${v}`);
+    t.blur(); renderAll();
   } else if (t.dataset.add) {
     if (!t.value) return;
     const pid = t.value;
@@ -403,7 +410,8 @@ $("board").addEventListener("change", e => {
 $("board").addEventListener("click", async e => {
   const t = e.target, card = t.closest(".crew"); if (!card) return;
   const id = card.dataset.c, c = crews[id];
-  if (t.dataset.rm) { const list = (c.crewIds || []).filter(x => x !== t.dataset.id); saveCrew(id, { crewIds: list }, `removed ${pname(t.dataset.id)}`); }
+  if (t.dataset.rmv !== undefined) { const v = t.dataset.rmv; saveCrew(id, { vehicleList: vehs(c).filter(x => x !== v) }, `removed vehicle ${v}`); }
+  else if (t.dataset.rm) { const list = (c.crewIds || []).filter(x => x !== t.dataset.id); saveCrew(id, { crewIds: list }, `removed ${pname(t.dataset.id)}`); }
   else if (t.dataset.addjob) saveCrew(id, { jobs: [...(c.jobs || []), { name: "", location: "" }] });
   else if (t.dataset.rmjob !== undefined) { const jobs = [...(c.jobs || [])]; const [gone] = jobs.splice(+t.dataset.rmjob, 1); saveCrew(id, { jobs }, `removed job ${gone?.name || ""}`); }
   else if (t.dataset.move) {
@@ -438,7 +446,7 @@ $("copyprev").onclick = async () => {
   const start = sortedCrews().length;
   for (const [k, d] of s.docs.entries()) {
     const x = d.data(); const r = doc(collection(db, "days", curDay, "crews"));
-    crews[r.id] = { id: r.id, order: start + (x.order ?? k), label: x.label || "", startTime: x.startTime || "", foremanId: x.foremanId || "", vehicle: x.vehicle || "", secondId: x.secondId || "", crewIds: x.crewIds || [], extraLabor: x.extraLabor || "", jobNumber: x.jobNumber || "", jobs: x.jobs || [], notes: x.notes || "" };
+    crews[r.id] = { id: r.id, order: start + (x.order ?? k), label: x.label || "", startTime: x.startTime || "", foremanId: x.foremanId || "", vehicleList: vehs(x), secondId: x.secondId || "", crewIds: x.crewIds || [], extraLabor: x.extraLabor || "", jobNumber: x.jobNumber || "", jobs: x.jobs || [], notes: x.notes || "" };
     await saveCrew(r.id, {});
   }
   const p = (await getDoc(doc(db, "days", from))).data() || {};
@@ -579,7 +587,7 @@ function renderCrew() {
         ${(c.jobs || []).filter(j => j.name || j.location).map(j => `<dt>Job</dt><dd>${esc(j.name)}${j.location ? " — " + esc(j.location) : ""}</dd>`).join("")}
         ${c.jobNumber ? `<dt>Job #</dt><dd>${esc(c.jobNumber)}</dd>` : ""}
         <dt>Foreman</dt><dd>${esc(c.foremanName || "—")}</dd>
-        <dt>Vehicle</dt><dd>${esc(c.vehicle || "—")}</dd>
+        <dt>Vehicle${vehs(c).length > 1 ? "s" : ""}</dt><dd>${esc(vehs(c).join(", ") || "—")}</dd>
         ${c.secondName ? `<dt>Second</dt><dd>${esc(c.secondName)}</dd>` : ""}
         ${c.crewNames?.length ? `<dt>Crew</dt><dd>${esc(c.crewNames.join(", "))}</dd>` : ""}
         ${c.extraLabor ? `<dt>Labor</dt><dd>${esc(c.extraLabor)}</dd>` : ""}
