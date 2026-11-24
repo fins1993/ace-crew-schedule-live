@@ -79,6 +79,32 @@ td,th{border-bottom:1px solid var(--line);padding:6px;text-align:left;font-size:
 .acked{margin-top:10px;padding:10px;border-radius:8px;background:#dff3e6;color:#1f6f43;font-weight:600;text-align:center}
 .daylbl{font-weight:700;margin:16px 2px 6px}
 .empty{color:var(--mut);text-align:center;padding:30px}
+/* announcements + messages */
+#annbar{max-width:1200px;margin:0 auto;padding:0 12px}
+.ann{display:flex;gap:10px;align-items:flex-start;background:#fff4cc;border:1px solid #e6c84d;border-radius:10px;padding:10px 12px;margin-top:10px}
+.ann .tx{flex:1;white-space:pre-wrap}
+.ann .by{font-size:12px;color:#7a5d00;margin-top:2px}
+.ann button{border:none;background:transparent;font-size:18px;line-height:1;padding:0 4px;color:#7a5d00}
+#msgs{max-width:1000px;margin:0 auto;padding:12px}
+#msgs section{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+#msgs h3{margin:0 0 8px;font-size:15px}
+.msgwrap{display:grid;grid-template-columns:280px 1fr;gap:12px;min-height:420px}
+@media(max-width:700px){.msgwrap{grid-template-columns:1fr}.msgwrap.inconvo .threads{display:none}.msgwrap:not(.inconvo) .convo{display:none}}
+.threads,.convo{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px}
+.thread{padding:8px;border-radius:8px;cursor:pointer;border-bottom:1px solid var(--line)}
+.thread:hover,.thread.on{background:var(--acc2)}
+.thread .nm{display:flex;justify-content:space-between;gap:6px}
+.thread .sn{color:var(--mut);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.thread.unread .nm b::after{content:" ●";color:var(--acc)}
+.convo{display:flex;flex-direction:column}
+.convo .hd{font-weight:700;padding-bottom:8px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
+.msglist{flex:1;overflow:auto;padding:10px 0;max-height:55vh;display:flex;flex-direction:column;gap:6px}
+.bub{max-width:80%;padding:7px 10px;border-radius:12px;background:#f0efe9;white-space:pre-wrap;word-wrap:break-word}
+.bub.mine{align-self:flex-end;background:var(--acc);color:#fff}
+.bub .tm{font-size:11px;opacity:.7;margin-top:2px}
+.compose{display:flex;gap:6px;padding-top:8px;border-top:1px solid var(--line)}
+.compose textarea{flex:1}
+.cnt{display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:var(--warn);color:#fff;font-size:11px;margin-left:4px;text-align:center}
 </style>
 </head>
 <body>
@@ -98,11 +124,13 @@ td,th{border-bottom:1px solid var(--line);padding:6px;text-align:left;font-size:
   <div class="tabs" id="admintabs">
     <button data-tab="board" class="on">Board</button>
     <button data-tab="roster">Roster &amp; logins</button>
+    <button data-tab="messages">Messages<span id="admcnt"></span></button>
   </div>
   <div class="sp"></div>
   <span id="whoami" style="color:var(--mut)"></span>
   <button id="logout">Sign out</button>
 </header>
+<div id="annbar"></div>
 
 <!-- ADMIN BOARD -->
 <div id="admin" class="hide">
@@ -164,8 +192,30 @@ td,th{border-bottom:1px solid var(--line);padding:6px;text-align:left;font-size:
     <button data-v="today" class="on">Today</button>
     <button data-v="tomorrow">Tomorrow</button>
     <button data-v="week">This week</button>
+    <button data-v="messages">Messages<span id="crewcnt"></span></button>
   </div>
   <div id="crewlist"></div>
+</div>
+
+<!-- MESSAGES (office + crew) -->
+<div id="msgs" class="hide">
+  <section id="annsec" class="hide">
+    <h3>Send an announcement</h3>
+    <textarea id="anntext" rows="2" placeholder="e.g. Rain plan: all crews report to the shop at 6:30"></textarea>
+    <div class="inline" style="margin-top:6px;flex-wrap:wrap">
+      <select id="annaud" style="width:auto"><option value="all">Everyone</option><option value="today">Everyone working today</option><option value="office">Office only</option></select>
+      <select id="anndur" style="width:auto"><option value="1">Show today only</option><option value="3">Show for 3 days</option><option value="7">Show for 1 week</option></select>
+      <button class="pri" id="annsend">Send announcement</button>
+    </div>
+    <div id="annlist" style="margin-top:10px"></div>
+  </section>
+  <div class="msgwrap" id="msgwrap">
+    <div class="threads">
+      <select id="newmsg"></select>
+      <div id="threadlist" style="margin-top:8px"></div>
+    </div>
+    <div class="convo" id="convo"><div class="empty">Pick a conversation, or start a new message.</div></div>
+  </div>
 </div>
 
 <script type="module">
@@ -234,7 +284,8 @@ $("logout").onclick = () => signOut(auth);
 
 onAuthStateChanged(auth, async user => {
   stopAll();
-  ["admin","roster","crewv","hdr"].forEach(id => $(id).classList.add("hide"));
+  ["admin","roster","crewv","hdr","msgs"].forEach(id => $(id).classList.add("hide"));
+  $("annbar").innerHTML = ""; curThread = null; if (msgUnsub) { msgUnsub(); msgUnsub = null; }
   if (!user) { $("login").classList.remove("hide"); me = null; return; }
   $("login").classList.add("hide");
   let snap = await getDoc(doc(db, "users", user.uid));
@@ -252,6 +303,7 @@ onAuthStateChanged(auth, async user => {
   $("robanner").classList.toggle("hide", me.role !== "viewer");
   $("whoami").textContent = me.name + (me.role === "admin" ? " (Admin)" : me.role === "viewer" ? " (View only)" : "");
   if (office) startAdmin(); else startCrew();
+  startShared();
 });
 
 // =============================== ADMIN ===============================
@@ -290,6 +342,8 @@ function showTab(t) {
   document.querySelectorAll("#admintabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
   $("admin").classList.toggle("hide", t !== "board");
   $("roster").classList.toggle("hide", t !== "roster");
+  $("msgs").classList.toggle("hide", t !== "messages");
+  if (t === "messages") renderMsgs();
 }
 document.querySelectorAll("#admintabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 $("daypick").onchange = () => { if ($("daypick").value) { curDay = $("daypick").value; watchDay(); } };
@@ -532,6 +586,7 @@ $("roster").addEventListener("click", async e => {
       await setDoc(doc(db, "users", cred.user.uid), { role: "crew", name: people[pid].name, username: un, personId: pid });
       await updateDoc(doc(db, "people", pid), { uid: cred.user.uid, username: un });
       log(`created login "${un}" for ${people[pid].name}`);
+      syncDirectory();
       alert(`Login created.\nUsername: ${un}\nPIN: ${pin}\n\nGive these to ${people[pid].name}. Re-save any crews they're already on so they can see them.`);
     } catch (err) { alert(err.code === "auth/email-already-in-use" ? "That username is taken." : "Couldn't create login: " + err.message); }
   }
@@ -548,6 +603,7 @@ $("mkoffice").onclick = async () => {
     await signOut(secAuth);
     await setDoc(doc(db, "users", cred.user.uid), { role, name, email });
     log(`created ${role === "viewer" ? "view-only" : "full"} admin login for ${name}`);
+    syncDirectory();
     ["offname","offemail","offpass"].forEach(id => $(id).value = "");
     alert(`Login created for ${name}.\nEmail: ${email}\nPassword: ${pass}\nAccess: ${role === "viewer" ? "Admin (view only)" : "Admin (full edit)"}`);
   } catch (err) { alert(err.code === "auth/email-already-in-use" ? "That email already has a login." : "Couldn't create login: " + err.message); }
@@ -557,8 +613,8 @@ $("roster").addEventListener("change", async e => {
   const u = officeUsers.find(x => x.uid === uid); const v = e.target.value;
   if (v === "none") {
     if (!confirm(`Remove ${u.name}'s access? They won't be able to sign in to the schedule.`)) { renderRoster(); return; }
-    await deleteDoc(doc(db, "users", uid)); log(`removed access for ${u.name}`);
-  } else { await updateDoc(doc(db, "users", uid), { role: v }); log(`${u.name} set to ${v === "viewer" ? "view only" : "full edit"}`); }
+    await deleteDoc(doc(db, "users", uid)); log(`removed access for ${u.name}`); syncDirectory();
+  } else { await updateDoc(doc(db, "users", uid), { role: v }); log(`${u.name} set to ${v === "viewer" ? "view only" : "full edit"}`); syncDirectory(); }
 });
 $("savelook").onclick = async () => {
   const n = Math.max(1, Math.min(30, parseInt($("lookahead").value) || 7));
@@ -591,13 +647,20 @@ async function startCrew() {
     s => { myNotes = s.docs.map(d => ({ id: d.id, ...d.data() })); renderCrew(); }, err => console.error(err)));
 }
 document.addEventListener("focusout", () => setTimeout(() => { if (me && me.role === "crew" && !document.activeElement?.closest?.(".ccard")) renderCrew(); }, 300));
-document.querySelectorAll("#crewtabs button").forEach(b => b.onclick = () => { crewTab = b.dataset.v; document.querySelectorAll("#crewtabs button").forEach(x => x.classList.toggle("on", x === b)); renderCrew(); });
+document.querySelectorAll("#crewtabs button").forEach(b => b.onclick = () => {
+  crewTab = b.dataset.v; document.querySelectorAll("#crewtabs button").forEach(x => x.classList.toggle("on", x === b));
+  const m = crewTab === "messages";
+  $("crewlist").classList.toggle("hide", m); $("msgs").classList.toggle("hide", !m);
+  if (m) renderMsgs(); else renderCrew();
+});
 
 function renderCrew() {
   // don't wipe a note or photo someone is in the middle of sending
   const ae = document.activeElement;
   if (ae?.closest?.(".ccard") && /^(TEXTAREA|INPUT)$/.test(ae.tagName)) return;
   if ([...document.querySelectorAll("#crewlist [data-note]")].some(x => x.value.trim()) || [...document.querySelectorAll("#crewlist [data-photo]")].some(x => x.files.length)) return;
+  renderAnn();
+  if (crewTab === "messages") return;
   const t = todayKey(), tm = addDays(t, 1);
   let list = myCrews.filter(c => crewTab === "today" ? c.date === t : crewTab === "tomorrow" ? c.date === tm : true)
     .sort((a,b) => a.date.localeCompare(b.date) || (a.startTime || "").localeCompare(b.startTime || ""));
@@ -684,6 +747,144 @@ $("crewlist").addEventListener("click", async e => {
     } catch (err) { alert("Couldn't send: " + err.message); t.disabled = false; t.textContent = "Send"; }
   }
 });
+
+// =============================== MESSAGES & ANNOUNCEMENTS ===============================
+// directory/{uid} = { name, role: "office" | "crew" } — the list of who can be messaged.
+// Full Admins keep it in step with the logins each time they open the app.
+let directory = {}, threads = [], curThread = null, curOther = null, msgUnsub = null, curMsgs = [], anns = [];
+const myKind = () => (me.role === "crew" ? "crew" : "office");
+const tid = (a, b) => [a, b].sort().join("_");
+const canMessage = uid => uid !== me.uid && directory[uid] && !(myKind() === "crew" && directory[uid].role === "crew");
+const unread = t => t.lastBy && t.lastBy !== me.uid && ms(t.lastAt) > ms(t.read?.[me.uid]);
+
+async function syncDirectory() {
+  if (me?.role !== "admin") return;
+  try {
+    const us = await getDocs(collection(db, "users"));
+    const live = {};
+    const b = writeBatch(db);
+    us.forEach(d => { const u = d.data(); live[d.id] = 1; b.set(doc(db, "directory", d.id), { name: u.name || "?", role: u.role === "crew" ? "crew" : "office" }); });
+    const ds = await getDocs(collection(db, "directory"));
+    ds.forEach(d => { if (!live[d.id]) b.delete(d.ref); });
+    await b.commit();
+  } catch (e) { console.warn("directory sync", e); }
+}
+
+function startShared() {
+  syncDirectory();
+  unsubs.push(onSnapshot(collection(db, "directory"), s => { directory = {}; s.forEach(d => directory[d.id] = d.data()); renderMsgs(); }, e => console.warn("directory", e)));
+  unsubs.push(onSnapshot(query(collection(db, "threads"), where("members", "array-contains", me.uid)),
+    s => { threads = s.docs.map(d => ({ id: d.id, ...d.data({ serverTimestamps: "estimate" }) })); renderMsgs(); }, e => console.warn("threads", e)));
+  unsubs.push(onSnapshot(query(collection(db, "announcements"), where("expires", ">", Timestamp.now())),
+    s => { anns = s.docs.map(d => ({ id: d.id, ...d.data({ serverTimestamps: "estimate" }) })); renderAnn(); renderMsgs(); }, e => console.warn("announcements", e)));
+  $("annsec").classList.toggle("hide", me.role !== "admin");
+}
+
+// ---- announcements ----
+const dismissKey = () => "ann-dismissed-" + me.uid;
+const getDismissed = () => { try { return JSON.parse(localStorage.getItem(dismissKey()) || "[]"); } catch { return []; } };
+function annVisible(a) {
+  if (ms(a.expires) <= Date.now()) return false;
+  if (myKind() === "office") return true;
+  if (a.audience === "office") return false;
+  if (a.audience === "today") return a.date === todayKey() && myCrews.some(c => c.date === todayKey());
+  return true;
+}
+function renderAnn() {
+  if (!me) return;
+  const gone = getDismissed();
+  const list = anns.filter(a => annVisible(a) && !gone.includes(a.id)).sort((a, b) => ms(b.at) - ms(a.at));
+  $("annbar").innerHTML = list.map(a => `<div class="ann"><div style="font-size:18px">📢</div><div style="flex:1"><div class="tx">${esc(a.text)}</div><div class="by">${esc(a.byName)} · ${esc(fmtTime(a.at))}</div></div><button data-dismiss="${a.id}" title="Dismiss">×</button></div>`).join("");
+}
+$("annbar").addEventListener("click", e => {
+  const id = e.target.dataset.dismiss; if (!id) return;
+  const g = getDismissed(); g.push(id); try { localStorage.setItem(dismissKey(), JSON.stringify(g.slice(-200))); } catch {}
+  renderAnn();
+});
+$("annsend").onclick = async () => {
+  const text = $("anntext").value.trim(); if (!text) return;
+  const aud = $("annaud").value, days = +$("anndur").value;
+  const end = dateOf(todayKey()); end.setDate(end.getDate() + (aud === "today" ? 1 : days));
+  const label = { all: "Everyone", today: "Everyone working today", office: "Office only" }[aud];
+  if (!confirm(`Send this announcement to: ${label}?\n\n${text}`)) return;
+  try {
+    await addDoc(collection(db, "announcements"), { text, audience: aud, date: todayKey(), at: serverTimestamp(), by: me.uid, byName: me.name, expires: Timestamp.fromDate(end) });
+    $("anntext").value = ""; log(`announcement to ${label}: ${text}`);
+  } catch (err) { alert("Couldn't send: " + err.message); }
+};
+$("annlist").addEventListener("click", async e => {
+  const id = e.target.dataset.delann; if (!id) return;
+  if (confirm("Remove this announcement for everyone?")) await deleteDoc(doc(db, "announcements", id));
+});
+
+// ---- direct messages ----
+function renderMsgs() {
+  if (!me) return;
+  const n = threads.filter(unread).length;
+  const badge = n ? `<span class="cnt">${n}</span>` : "";
+  $("admcnt").innerHTML = badge; $("crewcnt").innerHTML = badge;
+  if ($("msgs").classList.contains("hide")) return;
+  // announcement list (admins)
+  if (me.role === "admin") {
+    const act = anns.filter(a => ms(a.expires) > Date.now()).sort((a, b) => ms(b.at) - ms(a.at));
+    $("annlist").innerHTML = act.length ? `<div class="lbl" style="font-size:11px;text-transform:uppercase;color:var(--mut);margin-bottom:4px">Showing now</div>` + act.map(a => `<div style="display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:6px 0"><div style="flex:1"><b>${esc({ all: "Everyone", today: "Working today", office: "Office" }[a.audience])}</b> · ${esc(a.text)}<div style="font-size:12px;color:var(--mut)">${esc(a.byName)} · ${esc(fmtTime(a.at))} · until ${esc(nice(keyOf(new Date(ms(a.expires) - 1))))}</div></div><button class="sm" data-delann="${a.id}">Remove</button></div>`).join("") : "";
+  }
+  // new-message picker
+  const people2 = Object.entries(directory).filter(([u]) => canMessage(u)).sort((a, b) => a[1].name.localeCompare(b[1].name));
+  $("newmsg").innerHTML = `<option value="">+ New message to…</option>` + people2.map(([u, d]) => `<option value="${u}">${esc(d.name)}${d.role === "office" ? " (Office)" : ""}</option>`).join("");
+  // thread list
+  const sorted = [...threads].sort((a, b) => ms(b.lastAt) - ms(a.lastAt));
+  $("threadlist").innerHTML = sorted.map(t => {
+    const other = t.members.find(m => m !== me.uid);
+    return `<div class="thread ${unread(t) ? "unread" : ""} ${t.id === curThread ? "on" : ""}" data-open="${other}"><div class="nm"><b>${esc(directory[other]?.name || "Former user")}</b><span style="font-size:11px;color:var(--mut)">${esc(fmtTime(t.lastAt))}</span></div><div class="sn">${t.lastBy === me.uid ? "You: " : ""}${esc(t.lastText || "")}</div></div>`;
+  }).join("") || `<div class="empty" style="padding:16px">No conversations yet.</div>`;
+  renderConvo();
+}
+function renderConvo() {
+  if ($("msgs").classList.contains("hide")) return;
+  $("msgwrap").classList.toggle("inconvo", !!curThread);
+  if (!curThread) { $("convo").innerHTML = `<div class="empty">Pick a conversation, or start a new message.</div>`; return; }
+  const box = $("convo").querySelector("textarea"); const draft = box ? box.value : "";
+  const focused = document.activeElement === box;
+  $("convo").innerHTML = `<div class="hd"><button class="sm" data-back="1">←</button>${esc(directory[curOther]?.name || "Former user")}</div>
+    <div class="msglist" id="msglist">${curMsgs.map(m => `<div class="bub ${m.from === me.uid ? "mine" : ""}">${esc(m.text)}<div class="tm">${esc(fmtTime(m.at))}</div></div>`).join("") || `<div class="empty" style="padding:16px">No messages yet. Say hello.</div>`}</div>
+    ${canMessage(curOther) ? `<div class="compose"><textarea rows="2" placeholder="Type a message…"></textarea><button class="pri" data-sendmsg="1">Send</button></div>` : `<div class="empty" style="padding:8px">This person no longer has access.</div>`}`;
+  const nb = $("convo").querySelector("textarea"); if (nb) { nb.value = draft; if (focused) nb.focus(); }
+  const ml = $("msglist"); ml.scrollTop = ml.scrollHeight;
+  const t = threads.find(x => x.id === curThread);
+  if (t && unread(t)) updateDoc(doc(db, "threads", t.id), { [`read.${me.uid}`]: serverTimestamp() }).catch(() => {});
+}
+function openThread(other) {
+  curOther = other; curThread = tid(me.uid, other); curMsgs = [];
+  if (msgUnsub) msgUnsub();
+  msgUnsub = null;
+  if (threads.some(t => t.id === curThread)) subMsgs();
+  renderMsgs();
+}
+function subMsgs() { // only once the thread exists, or the rules refuse the read
+  if (msgUnsub) msgUnsub();
+  msgUnsub = onSnapshot(query(collection(db, "threads", curThread, "msgs"), orderBy("at")),
+    s => { curMsgs = s.docs.map(d => d.data({ serverTimestamps: "estimate" })); renderConvo(); }, e => console.warn("msgs", e));
+}
+$("newmsg").onchange = e => { const u = e.target.value; if (u) openThread(u); };
+$("threadlist").addEventListener("click", e => { const el = e.target.closest("[data-open]"); if (el) openThread(el.dataset.open); });
+$("convo").addEventListener("click", async e => {
+  if (e.target.dataset.back) { curThread = null; if (msgUnsub) { msgUnsub(); msgUnsub = null; } renderMsgs(); return; }
+  if (!e.target.dataset.sendmsg) return;
+  const box = $("convo").querySelector("textarea"); const text = box.value.trim(); if (!text) return;
+  const btn = e.target; btn.disabled = true;
+  try {
+    const id = curThread, ref1 = doc(db, "threads", id);
+    const exists = threads.some(t => t.id === id);
+    if (!exists) await setDoc(ref1, { members: [me.uid, curOther].sort(), lastText: text.slice(0, 120), lastAt: serverTimestamp(), lastBy: me.uid, read: { [me.uid]: serverTimestamp() } });
+    else await updateDoc(ref1, { lastText: text.slice(0, 120), lastAt: serverTimestamp(), lastBy: me.uid, [`read.${me.uid}`]: serverTimestamp() });
+    await addDoc(collection(db, "threads", id, "msgs"), { from: me.uid, text, at: serverTimestamp() });
+    box.value = "";
+    if (!msgUnsub) subMsgs();
+  } catch (err) { alert("Couldn't send: " + err.message); }
+  btn.disabled = false;
+});
+$("convo").addEventListener("keydown", e => { if (e.target.tagName === "TEXTAREA" && e.key === "Enter" && !e.shiftKey && window.innerWidth > 700) { e.preventDefault(); $("convo").querySelector("[data-sendmsg]")?.click(); } });
 </script>
 </body>
 </html>
